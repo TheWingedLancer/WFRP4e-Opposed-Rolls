@@ -1,28 +1,28 @@
 // WFRP4e Opposed Tests module for Foundry VTT v13
 // GM macro + chat listener/action handlers for opposed tests,
 // including Grapple and Entangled special-case resolution.
+//
+// Rolls use the native WFRP4e roll dialog (setupSkill / setupCharacteristic)
+// so participants can adjust modifiers, difficulty, and talent bonuses.
+// For player-owned tokens the dialog is opened on the player's client via
+// socket messaging; for GM-controlled tokens it opens on the GM's screen.
 
 const MODULE_ID = "wfrp4e-opposed-tests";
+const SOCKET_ID = `module.${MODULE_ID}`;
 const MACRO_TYPE = "script";
-const ROLL_TIMEOUT_MS = 30000;
+const ROLL_TIMEOUT_MS = 120000; // 2 min — native dialog takes longer than a quick click
 
 // ---------------------------------------------------------------------------
 // Localization helper
 // ---------------------------------------------------------------------------
 
-/**
- * Shorthand for game.i18n.localize / game.i18n.format.
- * @param {string} key  - Translation key (without module prefix).
- * @param {object} [data] - Interpolation data for game.i18n.format.
- * @returns {string}
- */
 function loc(key, data) {
   const fullKey = key.startsWith(MODULE_ID) ? key : `${MODULE_ID}.${key}`;
   return data ? game.i18n.format(fullKey, data) : game.i18n.localize(fullKey);
 }
 
 // ---------------------------------------------------------------------------
-// HTML-escape helper (XSS safety for interpolated names)
+// HTML-escape helper (XSS safety)
 // ---------------------------------------------------------------------------
 
 function esc(str) {
@@ -35,7 +35,6 @@ function esc(str) {
 // Characteristic helpers
 // ---------------------------------------------------------------------------
 
-/** Return the Strength Bonus for an actor. */
 function getSB(actor) {
   const c = actor?.system?.characteristics?.s;
   const bonusRaw = c && (c.bonus ?? c.b);
@@ -46,7 +45,6 @@ function getSB(actor) {
   return 0;
 }
 
-/** Return the Toughness Bonus for an actor. */
 function getTB(actor) {
   const c = actor?.system?.characteristics?.t;
   const bonusRaw = c && (c.bonus ?? c.b);
@@ -57,16 +55,11 @@ function getTB(actor) {
   return 0;
 }
 
-/** Return the total value of a characteristic by key. */
 function getCharacteristicValue(actor, key) {
   const c = actor?.system?.characteristics?.[key];
   return Number(c && (c.value ?? c.total ?? c) || 0);
 }
 
-/**
- * Given a skill name, return the characteristic key it is based on.
- * Uses the WFRP4e system config maps.
- */
 function inferSkillCharacteristic(skillName) {
   const n = (skillName || "").trim().toLowerCase();
   if (!n) return null;
@@ -78,20 +71,17 @@ function inferSkillCharacteristic(skillName) {
   return mapA[skillKey] || mapB[skillKey] || null;
 }
 
-/** Look up a skill's total value on an actor, falling back to raw characteristic. */
 function getSkillValue(actor, name) {
   const items = actor?.items?.contents || actor?.items || [];
   const skill = items.find(
     i => i.type === "skill" && i.name && i.name.toLowerCase() === (name || "").trim().toLowerCase()
   ) || null;
-
   if (skill) {
     const sys = skill.system || {};
     const total = Number(
       (sys.total && (sys.total.value ?? sys.total)) ?? (sys.value && (sys.value.value ?? sys.value))
     );
     if (Number.isFinite(total)) return total;
-
     const charKey = typeof sys.characteristic === "string" ? sys.characteristic : null;
     const charVal = Number(
       (sys.characteristic && sys.characteristic.value) ??
@@ -101,19 +91,16 @@ function getSkillValue(actor, name) {
     const base = charVal + adv;
     if (Number.isFinite(base)) return base;
   }
-
   const charKey = inferSkillCharacteristic(name);
   if (charKey) return getCharacteristicValue(actor, charKey);
   return NaN;
 }
 
-/** Return the first active player who owns this actor, or null. */
 function getActiveOwner(actor) {
   const owners = game.users.players.filter(u => u.active && actor.testUserPermission(u, "OWNER"));
   return owners[0] ?? null;
 }
 
-/** Calculate Success Levels (SL) per WFRP4e rules. */
 function calcSL(rollTotal, target) {
   return Math.floor(target / 10) - Math.floor(rollTotal / 10);
 }
@@ -127,7 +114,6 @@ function resolveHitLocKey(rollTotal, defenderActor) {
   let key = null;
   if (typeof hitLoc === "string") key = hitLoc;
   else if (hitLoc && typeof hitLoc === "object") key = hitLoc.value ?? hitLoc.key ?? hitLoc.id ?? hitLoc.name;
-
   const armour = defenderActor?.status?.armour;
   if (key && armour && armour[key]) return key;
   if (armour?.body) return "body";
@@ -145,9 +131,7 @@ async function applyStackedChange(actor, key, delta) {
   while (delta > 0) {
     const effect = typeof actor.hasCondition === "function" ? actor.hasCondition(key) : null;
     if (!effect) {
-      if (typeof actor.addCondition === "function") {
-        await actor.addCondition(key);
-      }
+      if (typeof actor.addCondition === "function") await actor.addCondition(key);
     } else {
       const current = effect.system?.condition?.value || 1;
       await effect.update({ "system.condition.value": current + 1 });
@@ -174,66 +158,184 @@ async function removeStackedChange(actor, key, delta) {
 }
 
 // ---------------------------------------------------------------------------
-// Roll delegation helpers
+// Native WFRP4e roll execution (runs on the local client)
 // ---------------------------------------------------------------------------
 
 /**
- * Wait for a chat message containing the roll result for a given request ID.
- * @param {string} requestId
- * @param {string} label
- * @returns {Promise<{total: number}>}
+ * Perform a WFRP4e roll using the native system dialog on the local client.
+ * Works for both characteristics and skills via actor.setupCharacteristic()
+ * or actor.setupSkill().
+ *
+ * @param {string} actorId - The actor's document ID.
+ * @param {string} mode    - "char" or "skill".
+ * @param {string} pick    - Characteristic key (e.g. "ws") or skill name (e.g. "Athletics").
+ * @param {string} title   - Appended to the dialog title for context.
+ * @returns {Promise<{sl: number, roll: number, target: number, succeeded: boolean}|null>}
+ *   Null if the user cancelled the dialog.
  */
-function waitForResult(requestId, label) {
+async function performLocalWfrpRoll(actorId, mode, pick, title) {
+  const actor = game.actors.get(actorId);
+  if (!actor) {
+    console.warn(`${MODULE_ID} | Actor ${actorId} not found for local roll.`);
+    return null;
+  }
+
+  const options = {
+    skipTargets: true,
+    appendTitle: ` - ${title}`
+  };
+
+  let test;
+  try {
+    if (mode === "char") {
+      test = await actor.setupCharacteristic(pick, options);
+    } else {
+      test = await actor.setupSkill(pick, options);
+    }
+  } catch (e) {
+    // User closed the dialog without rolling
+    console.log(`${MODULE_ID} | Roll dialog cancelled for ${actor.name}.`);
+    return null;
+  }
+
+  if (!test) return null;
+
+  try {
+    await test.roll();
+  } catch (e) {
+    console.warn(`${MODULE_ID} | test.roll() failed:`, e);
+    return null;
+  }
+
+  // Extract results from the WFRP4e test object
+  const result = test.result || {};
+  const sl = Number(result.SL ?? result.sl ?? 0);
+  const roll = Number(result.roll ?? 0);
+  const target = Number(result.target ?? 0);
+  const succeeded = !!(test.succeeded ?? result.outcome === "success");
+
+  return { sl, roll, target, succeeded };
+}
+
+// ---------------------------------------------------------------------------
+// Socket-based roll delegation
+// ---------------------------------------------------------------------------
+
+// Pending roll requests keyed by requestId, resolved when the player responds
+const pendingRollRequests = new Map();
+
+/**
+ * Handle an incoming socket message. Both GM and player clients listen.
+ */
+function handleSocketMessage(data) {
+  if (!data || !data.action) return;
+
+  // --- Player receives a roll request from the GM ---
+  if (data.action === "rollRequest" && data.targetUserId === game.user.id) {
+    handleIncomingRollRequest(data);
+    return;
+  }
+
+  // --- GM receives a roll result from a player ---
+  if (data.action === "rollResult" && game.user.isGM) {
+    const pending = pendingRollRequests.get(data.requestId);
+    if (pending) {
+      pendingRollRequests.delete(data.requestId);
+      pending.resolve(data.result);
+    }
+    return;
+  }
+
+  // --- GM receives a cancellation from a player ---
+  if (data.action === "rollCancelled" && game.user.isGM) {
+    const pending = pendingRollRequests.get(data.requestId);
+    if (pending) {
+      pendingRollRequests.delete(data.requestId);
+      pending.resolve(null);
+    }
+    return;
+  }
+}
+
+/**
+ * On the player's client: receive a roll request, open the native dialog,
+ * perform the roll, and send the result back via socket.
+ */
+async function handleIncomingRollRequest(data) {
+  const { requestId, actorId, mode, pick, title } = data;
+
+  ui.notifications.info(loc("notify.rollRequested", { name: title }));
+
+  const result = await performLocalWfrpRoll(actorId, mode, pick, title);
+
+  if (result) {
+    game.socket.emit(SOCKET_ID, {
+      action: "rollResult",
+      requestId,
+      result
+    });
+  } else {
+    game.socket.emit(SOCKET_ID, {
+      action: "rollCancelled",
+      requestId
+    });
+  }
+}
+
+/**
+ * Request a WFRP4e roll from a specific player via socket.
+ * Returns a Promise that resolves when the player completes their roll.
+ *
+ * @param {string} userId  - The target player's user ID.
+ * @param {string} actorId - The actor to roll for.
+ * @param {string} mode    - "char" or "skill".
+ * @param {string} pick    - Characteristic key or skill name.
+ * @param {string} title   - Context label for the dialog.
+ * @returns {Promise<{sl: number, roll: number, target: number, succeeded: boolean}|null>}
+ */
+function requestRemoteRoll(userId, actorId, mode, pick, title) {
   return new Promise((resolve, reject) => {
+    const requestId = foundry.utils.randomID();
+
     const timeoutId = setTimeout(() => {
-      Hooks.off("createChatMessage", handler);
-      reject(new Error(loc("error.timeout", { label })));
+      pendingRollRequests.delete(requestId);
+      reject(new Error(loc("error.timeout", { label: title })));
     }, ROLL_TIMEOUT_MS);
 
-    const handler = (msg) => {
-      const data = msg.flags?.tanglefoot;
-      if (!data || data.requestId !== requestId) return;
-      clearTimeout(timeoutId);
-      Hooks.off("createChatMessage", handler);
-      resolve({ total: data.total ?? msg.rolls?.[0]?.total });
-    };
+    pendingRollRequests.set(requestId, {
+      resolve: (result) => {
+        clearTimeout(timeoutId);
+        resolve(result);
+      }
+    });
 
-    Hooks.on("createChatMessage", handler);
+    game.socket.emit(SOCKET_ID, {
+      action: "rollRequest",
+      requestId,
+      targetUserId: userId,
+      actorId,
+      mode,
+      pick,
+      title
+    });
   });
 }
 
 /**
- * Request a d100 roll from a player (or roll locally for the GM).
- * If the actor's owner is another player, a whispered roll-request card is sent
- * and we await their response via the chat listener.
+ * Perform a roll for a single participant.
+ * If the actor is owned by an active player, the roll is delegated via socket.
+ * Otherwise the GM performs it locally using the native WFRP4e dialog.
  */
-async function requestRoll(owner, actor, label, targetValue) {
-  if (!owner || owner.id === game.user.id) {
-    const roll = await new Roll("1d100").evaluate();
-    await roll.toMessage({
-      speaker: ChatMessage.getSpeaker({ actor }),
-      flavor: `${esc(label)} (${loc("chat.target", { value: targetValue })})`,
-      flags: { tanglefoot: { requestId: "local-" + foundry.utils.randomID(), total: roll.total } }
-    });
-    return { total: roll.total };
+async function rollForParticipant(actor, mode, pick, title) {
+  const owner = getActiveOwner(actor);
+
+  // Owner is another player — delegate via socket
+  if (owner && owner.id !== game.user.id) {
+    return await requestRemoteRoll(owner.id, actor.id, mode, pick, title);
   }
 
-  const requestId = foundry.utils.randomID();
-  const card =
-    `<div class="tanglefoot-roll-request">` +
-    `<p><strong>${esc(label)}</strong></p>` +
-    `<p>${loc("chat.target", { value: targetValue })}</p>` +
-    `<button type="button" data-tanglefoot-roll="${requestId}">${loc("chat.rollButton")}</button>` +
-    `</div>`;
-
-  await ChatMessage.create({
-    content: card,
-    speaker: ChatMessage.getSpeaker({ actor }),
-    whisper: [owner.id],
-    flags: { tanglefoot: { requestId, actorId: actor.id, label, targetValue } }
-  });
-
-  return await waitForResult(requestId, label);
+  // GM rolls locally (or no active owner found)
+  return await performLocalWfrpRoll(actor.id, mode, pick, title);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,11 +356,9 @@ function getMacroCommand() {
 
 async function ensureMacro() {
   if (!game.user.isGM) return;
-
   const macroName = loc("macro.name");
   const existing = game.macros.find(m => m.name === macroName);
   const command = getMacroCommand();
-
   if (!existing) {
     await Macro.create({
       name: macroName,
@@ -269,7 +369,6 @@ async function ensureMacro() {
     ui.notifications.info(loc("macro.created", { name: macroName }));
     return;
   }
-
   const needsUpdate = existing.type !== MACRO_TYPE || existing.command !== command;
   if (needsUpdate) {
     await existing.update({ type: MACRO_TYPE, command });
@@ -278,7 +377,7 @@ async function ensureMacro() {
 }
 
 // ---------------------------------------------------------------------------
-// Chat listener (hooks into rendered chat cards)
+// Chat listener (GM action buttons only — roll requests now use sockets)
 // ---------------------------------------------------------------------------
 
 let listenerInstalled = false;
@@ -287,37 +386,7 @@ function installListener() {
   if (listenerInstalled) return;
   listenerInstalled = true;
 
-  // v13: use renderChatMessageHTML — html arg is an HTMLElement, not jQuery
   Hooks.on("renderChatMessageHTML", (message, html, _context) => {
-
-    // --- Player roll-request button handling ---
-    const rollReq = message.flags?.tanglefoot;
-    if (rollReq) {
-      if (!message.whisper || !message.whisper.includes(game.user.id)) return;
-      const btn = html.querySelector(`[data-tanglefoot-roll="${rollReq.requestId}"]`);
-      if (!btn) return;
-
-      btn.addEventListener("click", async () => {
-        btn.disabled = true;
-        const actor = game.actors.get(rollReq.actorId);
-        if (!actor) return;
-
-        const roll = await new Roll("1d100").evaluate();
-        await roll.toMessage({
-          speaker: ChatMessage.getSpeaker({ actor }),
-          flavor: `${esc(rollReq.label)} (${loc("chat.target", { value: rollReq.targetValue })})`,
-          flags: {
-            tanglefoot: {
-              requestId: rollReq.requestId,
-              total: roll.total
-            }
-          }
-        });
-      });
-      return;
-    }
-
-    // --- GM action buttons (entangle / grapple) ---
     const actionFlags = message.flags?.opposedAction;
     if (!actionFlags || !game.user.isGM) return;
 
@@ -364,15 +433,13 @@ function installListener() {
                   damageEffects: [],
                   item: {
                     properties: { qualities: {}, flaws: {} },
-                    Qualities: [],
-                    Flaws: [],
+                    Qualities: [], Flaws: [],
                     runScripts: () => []
                   },
                   weapon: {
                     attackType: "melee",
                     properties: { qualities: {}, flaws: {} },
-                    Qualities: [],
-                    Flaws: []
+                    Qualities: [], Flaws: []
                   }
                 },
                 defenderTest: { context: { unopposed: false }, failed: true, weapon: null },
@@ -387,7 +454,6 @@ function installListener() {
             console.warn(`${MODULE_ID} | applyDamage failed, falling back to manual:`, e);
           }
 
-          // Fallback: manual wound calculation only if applyDamage was not used
           if (!damageApplied) {
             const before = token.actor.system.status.wounds.value;
             const tb = getTB(token.actor);
@@ -450,12 +516,17 @@ const CHAR_LIST = [
 
 /**
  * Run an opposed test between two or more selected tokens.
- * The GM selects tokens on the canvas, runs the macro, then picks
- * characteristics or skills for each participant. The module handles
- * rolling (delegating to players when appropriate), SL comparison,
- * and grapple/entangle action buttons on the GM-whispered result card.
  *
- * Requires at least 2 tokens selected. Grapple tests require exactly 2.
+ * The GM selects tokens, picks characteristics or skills for each, and
+ * each participant rolls using the **native WFRP4e roll dialog** with full
+ * access to modifiers, difficulty, and talent bonuses.
+ *
+ * - GM-controlled tokens: dialog opens on the GM's screen.
+ * - Player-controlled tokens: a socket message triggers the dialog on
+ *   the owning player's screen; results are sent back via socket.
+ *
+ * Rolls are performed sequentially (one dialog at a time) to avoid
+ * overlapping dialog windows.
  *
  * @returns {Promise<void>}
  */
@@ -475,7 +546,7 @@ async function runOpposedTest() {
   // Build localized characteristic list
   const charList = CHAR_LIST.map(c => ({ key: c.key, label: loc(c.locKey) }));
 
-  // Build combined skill list from system config + participant inventories
+  // Build combined skill list
   const buildAllSkills = () => {
     const cfg = game.wfrp4e?.config?.skills || {};
     const set = new Set(Object.values(cfg));
@@ -493,8 +564,6 @@ async function runOpposedTest() {
 
   const charOptionsHtml = optionHtml(charList, "key", "label");
   const skillOptionsHtml = optionHtml(skillOptions, "key", "label");
-
-  // Store option sets in a closure-scoped map (avoids fragile data-attribute escaping)
   const optionSets = { char: charOptionsHtml, skill: skillOptionsHtml };
 
   let formInner = "";
@@ -526,7 +595,6 @@ async function runOpposedTest() {
   const bindModeToggles = (root) => {
     const form = root?.querySelector?.("form");
     if (!form) return;
-
     const rebuild = (idx) => {
       const sel = form.querySelector(`select[name="pick_${idx}"]`);
       if (!sel) return;
@@ -535,11 +603,9 @@ async function runOpposedTest() {
       sel.innerHTML = optionSets[mode] || optionSets.char;
       if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
     };
-
     const radios = [...form.querySelectorAll(`input[type="radio"][name^="mode_"]`)];
     const idxs = [...new Set(radios.map(r => r.name.split("_")[1]))];
     idxs.forEach(rebuild);
-
     radios.forEach(r => {
       r.addEventListener("change", () => rebuild(r.name.split("_")[1]));
     });
@@ -551,7 +617,6 @@ async function runOpposedTest() {
       window: { title: loc("dialog.title") },
       content,
       render: (event, dialog) => {
-        // v13: dialog is the DialogV2 instance; dialog.element is the HTMLElement
         const root = dialog.element;
         bindModeToggles(root);
       },
@@ -563,12 +628,10 @@ async function runOpposedTest() {
           callback: (event, button) => {
             const form = button.form;
             if (!form) return null;
-
             const picks = participants.map((_, idx) => ({
               mode: form.querySelector(`input[name="mode_${idx}"]:checked`)?.value,
               pick: form.querySelector(`select[name="pick_${idx}"]`)?.value
             }));
-
             return {
               picks,
               isGrapple: form.querySelector(`input[name="isGrapple"]`)?.checked || false,
@@ -594,7 +657,6 @@ async function runOpposedTest() {
     return;
   }
 
-  // --- Label helper ---
   const labelForPick = (pick) => {
     if (pick.mode === "char") {
       const c = charList.find(x => x.key === pick.pick);
@@ -617,49 +679,40 @@ async function runOpposedTest() {
     });
   }
 
-  // --- Perform rolls ---
+  // --- Perform rolls sequentially using native WFRP4e dialog ---
   const results = [];
-  try {
-    const rollPromises = participants.map((p, idx) => {
-      const pick = formData.picks[idx];
-      let target;
+  for (let idx = 0; idx < participants.length; idx++) {
+    const p = participants[idx];
+    const pick = formData.picks[idx];
+    const label = `${p.token.name} - ${labelForPick(pick)}`;
 
-      if (pick.mode === "char") {
-        target = getCharacteristicValue(p.actor, pick.pick);
-      } else {
-        target = getSkillValue(p.actor, pick.pick);
-        if (!Number.isFinite(target)) {
-          const fallbackChar = inferSkillCharacteristic(pick.pick);
-          if (fallbackChar) target = getCharacteristicValue(p.actor, fallbackChar);
-          else {
-            ui.notifications.warn(loc("error.noSkill", { skill: pick.pick, name: p.token.name }));
-            target = 0;
-          }
-        }
-      }
+    let rollResult;
+    try {
+      rollResult = await rollForParticipant(p.actor, pick.mode, pick.pick, label);
+    } catch (err) {
+      console.error(`${MODULE_ID} | Roll error for ${p.token.name}:`, err);
+      ui.notifications.error(loc("error.timeout", { label }));
+      return;
+    }
 
-      const owner = getActiveOwner(p.actor);
-      const label = `${p.token.name} - ${labelForPick(pick)}`;
+    if (!rollResult) {
+      // Roll was cancelled — abort the opposed test
+      ui.notifications.warn(loc("error.rollCancelled", { name: p.token.name }));
+      return;
+    }
 
-      return requestRoll(owner, p.actor, label, target).then(r => ({
-        idx,
-        token: p.token,
-        actor: p.actor,
-        targetValue: target,
-        rollTotal: r.total
-      }));
+    results.push({
+      idx,
+      token: p.token,
+      actor: p.actor,
+      targetValue: rollResult.target,
+      rollTotal: rollResult.roll,
+      sl: rollResult.sl,
+      succeeded: rollResult.succeeded
     });
-
-    const settled = await Promise.all(rollPromises);
-    results.push(...settled);
-  } catch (err) {
-    console.error(`${MODULE_ID} | Roll error:`, err);
-    return;
   }
 
-  // --- Calculate SL and determine winner/loser ---
-  results.forEach(r => { r.sl = calcSL(r.rollTotal, r.targetValue); });
-
+  // --- Determine winner/loser ---
   const sorted = [...results].sort((a, b) => (b.sl !== a.sl) ? (b.sl - a.sl) : (b.targetValue - a.targetValue));
   let winner = sorted[0];
   if (sorted.length > 1) {
@@ -745,6 +798,9 @@ Hooks.once("init", () => {
 });
 
 Hooks.once("ready", async () => {
+  // Register socket listener (all clients — GM and players)
+  game.socket.on(SOCKET_ID, handleSocketMessage);
+
   installListener();
   await ensureMacro();
 });

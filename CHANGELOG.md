@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0] - 2026-03-25
+
+### Changed
+- **Native WFRP4e roll dialog** — All rolls now use `actor.setupSkill()` / `actor.setupCharacteristic()` instead of plain d100 rolls. Participants see the full WFRP4e roll window with modifiers, difficulty selection, and talent bonuses.
+- **Socket-based player roll delegation** — When a player-owned token needs to roll, a socket message opens the native roll dialog on that player's screen. The result is sent back to the GM via socket. This replaces the old whispered chat-card button approach.
+- **Sequential rolling** — Rolls are performed one at a time (rather than in parallel) to avoid overlapping dialog windows.
+- **`socket: true`** in `module.json` — Required for the new cross-client roll delegation.
+- **Roll timeout increased** to 2 minutes (from 30 seconds) to accommodate the native dialog workflow.
+- **SL is now read from the WFRP4e test result** rather than calculated manually. This means all system rules (Fast SL, Tests Above 100%, etc.) are respected automatically.
+- **Removed old roll-request chat card listener** — The `tanglefoot` flag-based chat button system is no longer used.
+- **Version bumped to 1.3.0.**
+
 ## [1.2.0] - 2026-02-25
 
 ### Fixed
