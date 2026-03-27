@@ -106,22 +106,6 @@ function calcSL(rollTotal, target) {
 }
 
 // ---------------------------------------------------------------------------
-// Hit location resolver
-// ---------------------------------------------------------------------------
-
-function resolveHitLocKey(rollTotal, defenderActor) {
-  const hitLoc = game.wfrp4e?.utility?.getHitLoc?.(rollTotal);
-  let key = null;
-  if (typeof hitLoc === "string") key = hitLoc;
-  else if (hitLoc && typeof hitLoc === "object") key = hitLoc.value ?? hitLoc.key ?? hitLoc.id ?? hitLoc.name;
-  const armour = defenderActor?.status?.armour;
-  if (key && armour && armour[key]) return key;
-  if (armour?.body) return "body";
-  const keys = armour ? Object.keys(armour) : [];
-  return keys[0] || "body";
-}
-
-// ---------------------------------------------------------------------------
 // Condition stack helpers
 // ---------------------------------------------------------------------------
 
@@ -417,56 +401,24 @@ function installListener() {
 
         if (action === "grapple-damage") {
           const winnerToken = canvas.tokens.get(actionFlags.winnerId);
-          const dmg = Math.max(0, Number(getSB(winnerToken?.actor)) + slDiff);
-          const hitRoll = Number(actionFlags.winnerRoll ?? 0);
-          const hitLocKey = resolveHitLocKey(hitRoll, token.actor);
-          let damageApplied = false;
-          let woundLoss = dmg;
+          const sb = getSB(winnerToken?.actor);
+          const tb = getTB(token.actor);
+          const rawDmg = sb + slDiff;
+          const woundLoss = Math.max(0, rawDmg - tb);
 
-          try {
-            if (typeof token.actor.applyDamage === "function") {
-              const dmgType = game.wfrp4e?.config?.DAMAGE_TYPE?.IGNORE_AP;
-              const opposedTest = {
-                attacker: winnerToken ? winnerToken.actor : null,
-                attackerTest: {
-                  result: { roll: hitRoll, critical: false },
-                  damageEffects: [],
-                  item: {
-                    properties: { qualities: {}, flaws: {} },
-                    Qualities: [], Flaws: [],
-                    runScripts: () => []
-                  },
-                  weapon: {
-                    attackType: "melee",
-                    properties: { qualities: {}, flaws: {} },
-                    Qualities: [], Flaws: []
-                  }
-                },
-                defenderTest: { context: { unopposed: false }, failed: true, weapon: null },
-                result: { damage: { value: dmg }, hitloc: { value: hitLocKey }, damaging: false }
-              };
-              if (dmgType !== undefined) {
-                await token.actor.applyDamage(opposedTest, dmgType);
-                damageApplied = true;
-              }
-            }
-          } catch (e) {
-            console.warn(`${MODULE_ID} | applyDamage failed, falling back to manual:`, e);
-          }
-
-          if (!damageApplied) {
-            const before = token.actor.system.status.wounds.value;
-            const tb = getTB(token.actor);
-            woundLoss = Math.max(0, dmg - tb);
+          if (woundLoss > 0) {
+            const before = Number(token.actor.system.status.wounds.value);
             const newWounds = Math.max(0, before - woundLoss);
-            if (newWounds !== before) {
+            if (Number.isFinite(newWounds) && newWounds !== before) {
               await token.actor.update({ "system.status.wounds.value": newWounds });
             }
           }
 
           await ChatMessage.create({
             speaker: ChatMessage.getSpeaker(),
-            content: `<div><strong>${loc("chat.grappleDamageResult", { wounds: woundLoss, name: esc(token.name) })}</strong></div>`
+            content:
+              `<div><strong>${loc("chat.grappleDamageResult", { wounds: woundLoss, name: esc(token.name) })}</strong>` +
+              `<br><small>${loc("chat.grappleDamageBreakdown", { sb, slDiff, tb })}</small></div>`
           });
 
           if (game.combat && winnerToken?.actor) {

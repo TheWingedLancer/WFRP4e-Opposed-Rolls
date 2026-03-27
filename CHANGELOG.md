@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1] - 2026-03-26
+
+### Fixed
+- **Grapple damage now applies correctly.** Removed the fake `applyDamage()` call that was passing an incomplete opposed test object, causing `wounds.value: must be a finite number` validation errors and `Cannot read properties of undefined (reading 'defenderTest')` errors from the WFRP4e advantage hooks. Grapple damage is now calculated directly as SB + SL diff - TB and applied via a clean wound update.
+- **Damage breakdown shown in chat.** Grapple damage messages now include a breakdown line (e.g., "SB 4 + SL diff 3 - TB 3") so the GM can verify the calculation.
+- **Removed unused `resolveHitLocKey` function** (no longer needed without the fake `applyDamage` call).
+
 ## [1.3.0] - 2026-03-25
 
 ### Changed

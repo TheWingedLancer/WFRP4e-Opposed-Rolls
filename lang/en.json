@@ -36,6 +36,7 @@
   "wfrp4e-opposed-tests.chat.grappleEntangle": "Give {name} Entangled",
   "wfrp4e-opposed-tests.chat.grappleRemove": "Remove Entangled from {name}",
   "wfrp4e-opposed-tests.chat.grappleDamageResult": "Grappling Damage: {wounds} wounds to {name}.",
+  "wfrp4e-opposed-tests.chat.grappleDamageBreakdown": "SB {sb} + SL diff {slDiff} - TB {tb}",
   "wfrp4e-opposed-tests.notify.entangledApply": "Entangled +{amount} on {name}.",
   "wfrp4e-opposed-tests.notify.entangledRemove": "Entangled -{amount} on {name}.",
   "wfrp4e-opposed-tests.notify.entangledApplyOne": "Entangled +1 on {name}.",
