@@ -150,14 +150,15 @@ async function removeStackedChange(actor, key, delta) {
  * Works for both characteristics and skills via actor.setupCharacteristic()
  * or actor.setupSkill().
  *
- * @param {string} actorId - The actor's document ID.
- * @param {string} mode    - "char" or "skill".
- * @param {string} pick    - Characteristic key (e.g. "ws") or skill name (e.g. "Athletics").
- * @param {string} title   - Appended to the dialog title for context.
+ * @param {string} actorId    - The actor's document ID.
+ * @param {string} mode       - "char" or "skill".
+ * @param {string} pick       - Characteristic key (e.g. "ws") or skill name (e.g. "Athletics").
+ * @param {string} title      - Appended to the dialog title for context.
+ * @param {object} [fields]   - Pre-filled dialog fields from the GM (difficulty, modifier).
  * @returns {Promise<{sl: number, roll: number, target: number, succeeded: boolean}|null>}
  *   Null if the user cancelled the dialog.
  */
-async function performLocalWfrpRoll(actorId, mode, pick, title) {
+async function performLocalWfrpRoll(actorId, mode, pick, title, fields = {}) {
   const actor = game.actors.get(actorId);
   if (!actor) {
     console.warn(`${MODULE_ID} | Actor ${actorId} not found for local roll.`);
@@ -166,8 +167,13 @@ async function performLocalWfrpRoll(actorId, mode, pick, title) {
 
   const options = {
     skipTargets: true,
-    appendTitle: ` - ${title}`
+    appendTitle: ` - ${title}`,
+    fields: {}
   };
+
+  // Pre-fill difficulty and modifier if set by the GM
+  if (fields.difficulty) options.fields.difficulty = fields.difficulty;
+  if (fields.modifier) options.fields.modifier = fields.modifier;
 
   let test;
   try {
@@ -246,11 +252,11 @@ function handleSocketMessage(data) {
  * perform the roll, and send the result back via socket.
  */
 async function handleIncomingRollRequest(data) {
-  const { requestId, actorId, mode, pick, title } = data;
+  const { requestId, actorId, mode, pick, title, fields } = data;
 
   ui.notifications.info(loc("notify.rollRequested", { name: title }));
 
-  const result = await performLocalWfrpRoll(actorId, mode, pick, title);
+  const result = await performLocalWfrpRoll(actorId, mode, pick, title, fields || {});
 
   if (result) {
     game.socket.emit(SOCKET_ID, {
@@ -268,16 +274,16 @@ async function handleIncomingRollRequest(data) {
 
 /**
  * Request a WFRP4e roll from a specific player via socket.
- * Returns a Promise that resolves when the player completes their roll.
  *
  * @param {string} userId  - The target player's user ID.
  * @param {string} actorId - The actor to roll for.
  * @param {string} mode    - "char" or "skill".
  * @param {string} pick    - Characteristic key or skill name.
  * @param {string} title   - Context label for the dialog.
+ * @param {object} [fields] - Pre-filled dialog fields (difficulty, modifier).
  * @returns {Promise<{sl: number, roll: number, target: number, succeeded: boolean}|null>}
  */
-function requestRemoteRoll(userId, actorId, mode, pick, title) {
+function requestRemoteRoll(userId, actorId, mode, pick, title, fields = {}) {
   return new Promise((resolve, reject) => {
     const requestId = foundry.utils.randomID();
 
@@ -300,7 +306,8 @@ function requestRemoteRoll(userId, actorId, mode, pick, title) {
       actorId,
       mode,
       pick,
-      title
+      title,
+      fields
     });
   });
 }
@@ -310,16 +317,16 @@ function requestRemoteRoll(userId, actorId, mode, pick, title) {
  * If the actor is owned by an active player, the roll is delegated via socket.
  * Otherwise the GM performs it locally using the native WFRP4e dialog.
  */
-async function rollForParticipant(actor, mode, pick, title) {
+async function rollForParticipant(actor, mode, pick, title, fields = {}) {
   const owner = getActiveOwner(actor);
 
   // Owner is another player — delegate via socket
   if (owner && owner.id !== game.user.id) {
-    return await requestRemoteRoll(owner.id, actor.id, mode, pick, title);
+    return await requestRemoteRoll(owner.id, actor.id, mode, pick, title, fields);
   }
 
   // GM rolls locally (or no active owner found)
-  return await performLocalWfrpRoll(actor.id, mode, pick, title);
+  return await performLocalWfrpRoll(actor.id, mode, pick, title, fields);
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +525,12 @@ async function runOpposedTest() {
   const skillOptionsHtml = optionHtml(skillOptions, "key", "label");
   const optionSets = { char: charOptionsHtml, skill: skillOptionsHtml };
 
+  // Build difficulty options from the WFRP4e system config
+  const difficultyLabels = game.wfrp4e?.config?.difficultyLabels || {};
+  const difficultyOptionsHtml = Object.entries(difficultyLabels)
+    .map(([key, label]) => `<option value="${esc(key)}"${key === "challenging" ? " selected" : ""}>${esc(label)}</option>`)
+    .join("");
+
   let formInner = "";
   participants.forEach((p, idx) => {
     formInner +=
@@ -532,6 +545,16 @@ async function runOpposedTest() {
             ${charOptionsHtml}
           </select>
         </label>
+        <div style="display:flex; gap:8px; margin-top:6px;">
+          <label style="flex:1;">${loc("dialog.difficulty")}
+            <select name="difficulty_${idx}" style="width:100%;">
+              ${difficultyOptionsHtml}
+            </select>
+          </label>
+          <label style="flex:0 0 80px;">${loc("dialog.modifier")}
+            <input type="number" name="modifier_${idx}" value="0" style="width:100%;">
+          </label>
+        </div>
       </fieldset>`;
   });
 
@@ -582,7 +605,9 @@ async function runOpposedTest() {
             if (!form) return null;
             const picks = participants.map((_, idx) => ({
               mode: form.querySelector(`input[name="mode_${idx}"]:checked`)?.value,
-              pick: form.querySelector(`select[name="pick_${idx}"]`)?.value
+              pick: form.querySelector(`select[name="pick_${idx}"]`)?.value,
+              difficulty: form.querySelector(`select[name="difficulty_${idx}"]`)?.value || "challenging",
+              modifier: Number(form.querySelector(`input[name="modifier_${idx}"]`)?.value) || 0
             }));
             return {
               picks,
@@ -640,7 +665,10 @@ async function runOpposedTest() {
 
     let rollResult;
     try {
-      rollResult = await rollForParticipant(p.actor, pick.mode, pick.pick, label);
+      rollResult = await rollForParticipant(p.actor, pick.mode, pick.pick, label, {
+        difficulty: pick.difficulty,
+        modifier: pick.modifier
+      });
     } catch (err) {
       console.error(`${MODULE_ID} | Roll error for ${p.token.name}:`, err);
       ui.notifications.error(loc("error.timeout", { label }));
