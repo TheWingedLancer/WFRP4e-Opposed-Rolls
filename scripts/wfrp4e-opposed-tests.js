@@ -657,6 +657,7 @@ async function runOpposedTest() {
       idx,
       token: p.token,
       actor: p.actor,
+      testLabel: labelForPick(pick),
       targetValue: rollResult.target,
       rollTotal: rollResult.roll,
       sl: rollResult.sl,
@@ -683,12 +684,15 @@ async function runOpposedTest() {
 
   // --- Build result messages ---
   const slDiff = (winner && loser) ? (winner.sl - loser.sl) : 0;
-  const winnerName = winner ? esc(winner.token.name) : loc("chat.noWinner");
-  const summaryLines = results
-    .map(r => `${esc(r.token.name)}: ${loc("chat.sl", { value: r.sl, target: r.targetValue })}`)
-    .join("<br>");
   const gmIds = game.users.filter(u => u.isGM).map(u => u.id);
 
+  // Determine the test name from the first pick (they're usually the same test)
+  const testLabel = labelForPick(formData.picks[0]);
+
+  // Format SL with +/- sign
+  const formatSL = (sl) => (sl >= 0 ? `+${sl}` : `${sl}`);
+
+  // GM action buttons
   const actionButtons = formData.isEntangle ? participants.map((p) =>
     `<div style="margin:4px 0;"><strong>${esc(p.token.name)}</strong><br>` +
     `<button type="button" data-opp-action="apply-entangled" data-opp-target="${p.token.id}">${loc("chat.applyEntangled")}</button>` +
@@ -702,17 +706,38 @@ async function runOpposedTest() {
       `<button type="button" data-opp-action="grapple-remove" data-opp-target="${winner.token.id}">${loc("chat.grappleRemove", { name: esc(winner.token.name) })}</button></div>`
     : "";
 
+  // Winner line
+  const winnerLine = winner
+    ? `<strong>${esc(winner.token.name)}</strong> ${loc("chat.winsOpposed", { test: esc(testLabel) })}`
+    : `<strong>${loc("chat.noWinner")}</strong> — ${loc("chat.draw")}`;
+
+  // Adjusted SL line
+  const adjustedSlLine = (winner && loser)
+    ? `${loc("chat.adjustedSL")}: <strong>${formatSL(slDiff)}</strong>`
+    : "";
+
+  // Individual roll lines
+  const rollLines = results
+    .map(r => loc("chat.rollDetail", {
+      name: esc(r.token.name),
+      target: r.targetValue,
+      roll: r.rollTotal,
+      sl: formatSL(r.sl)
+    }))
+    .join("<br>");
+
   const publicSummary =
     `<div class="opposed-summary">` +
-    `<strong>${loc("chat.opposedResult")}</strong><br>` +
-    `<strong>${loc("chat.winner")}</strong> ${winnerName} (${loc("chat.slDiff", { value: slDiff })})<br>` +
-    `<strong>${loc("chat.results")}</strong><br>${summaryLines}<br></div>`;
+    `<p>${winnerLine}</p>` +
+    `${adjustedSlLine ? `<p>${adjustedSlLine}</p>` : ""}` +
+    `<p style="margin-top:6px;"><strong>${loc("chat.individualResults")}:</strong><br>${rollLines}</p>` +
+    `</div>`;
 
   const gmSummary =
     `<div class="opposed-summary">` +
-    `<strong>${loc("chat.opposedResult")}</strong><br>` +
-    `<strong>${loc("chat.winner")}</strong> ${winnerName} (${loc("chat.slDiff", { value: slDiff })})<br>` +
-    `<strong>${loc("chat.results")}</strong><br>${summaryLines}<br>` +
+    `<p>${winnerLine}</p>` +
+    `${adjustedSlLine ? `<p>${adjustedSlLine}</p>` : ""}` +
+    `<p style="margin-top:6px;"><strong>${loc("chat.individualResults")}:</strong><br>${rollLines}</p>` +
     `${(formData.isGrapple || formData.isEntangle) ? `<hr><strong>${loc("chat.gmActions")}</strong><br>` : ""}` +
     `${actionButtons}${grappleButtons}</div>`;
 

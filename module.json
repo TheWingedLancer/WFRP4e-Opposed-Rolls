@@ -2,7 +2,7 @@
   "id": "wfrp4e-opposed-tests",
   "title": "WFRP4e Opposed Tests",
   "description": "GM opposed-test macro for WFRP4e (Foundry v13). Uses the native WFRP4e roll dialog with full modifier/difficulty/talent support. Player rolls are delegated via sockets. Supports Grapple and Entangled test resolution with GM action buttons.",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "authors": [
     {
       "name": "Jeramie Brown"
@@ -35,7 +35,7 @@
   "socket": true,
   "url": "https://github.com/TheWingedLancer/WFRP4e-Opposed-Rolls",
   "manifest": "https://raw.githubusercontent.com/TheWingedLancer/WFRP4e-Opposed-Rolls/main/module.json",
-  "download": "https://github.com/TheWingedLancer/WFRP4e-Opposed-Rolls/releases/download/v1.3.1/wfrp4e-opposed-tests.zip",
+  "download": "https://github.com/TheWingedLancer/WFRP4e-Opposed-Rolls/releases/download/v1.3.2/wfrp4e-opposed-tests.zip",
   "bugs": "https://github.com/TheWingedLancer/WFRP4e-Opposed-Rolls/issues",
   "readme": "https://github.com/TheWingedLancer/WFRP4e-Opposed-Rolls/blob/main/README.md",
   "changelog": "https://github.com/TheWingedLancer/WFRP4e-Opposed-Rolls/blob/main/CHANGELOG.md",
