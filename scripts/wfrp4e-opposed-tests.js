@@ -706,10 +706,10 @@ async function runOpposedTest() {
       `<button type="button" data-opp-action="grapple-remove" data-opp-target="${winner.token.id}">${loc("chat.grappleRemove", { name: esc(winner.token.name) })}</button></div>`
     : "";
 
-  // Winner line
+  // Winner line — name large and centered, test description below
   const winnerLine = winner
-    ? `<strong>${esc(winner.token.name)}</strong> ${loc("chat.winsOpposed", { test: esc(testLabel) })}`
-    : `<strong>${loc("chat.noWinner")}</strong> — ${loc("chat.draw")}`;
+    ? `<div style="text-align:center;"><strong style="font-size:1.3em;">${esc(winner.token.name)}</strong><br>${loc("chat.winsOpposed", { test: esc(testLabel) })}</div>`
+    : `<div style="text-align:center;"><strong style="font-size:1.3em;">${loc("chat.noWinner")}</strong><br>${loc("chat.draw")}</div>`;
 
   // Adjusted SL line
   const adjustedSlLine = (winner && loser)
@@ -728,14 +728,14 @@ async function runOpposedTest() {
 
   const publicSummary =
     `<div class="opposed-summary">` +
-    `<p>${winnerLine}</p>` +
+    `${winnerLine}` +
     `${adjustedSlLine ? `<p>${adjustedSlLine}</p>` : ""}` +
     `<p style="margin-top:6px;"><strong>${loc("chat.individualResults")}:</strong><br>${rollLines}</p>` +
     `</div>`;
 
   const gmSummary =
     `<div class="opposed-summary">` +
-    `<p>${winnerLine}</p>` +
+    `${winnerLine}` +
     `${adjustedSlLine ? `<p>${adjustedSlLine}</p>` : ""}` +
     `<p style="margin-top:6px;"><strong>${loc("chat.individualResults")}:</strong><br>${rollLines}</p>` +
     `${(formData.isGrapple || formData.isEntangle) ? `<hr><strong>${loc("chat.gmActions")}</strong><br>` : ""}` +
