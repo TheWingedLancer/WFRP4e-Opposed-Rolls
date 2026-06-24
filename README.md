@@ -14,7 +14,7 @@ A [Foundry VTT](https://foundryvtt.com/) module for the **Warhammer Fantasy Role
 
 ## Requirements
 
-- Foundry VTT **v13** (verified 13.351)
+- Foundry VTT **v13 or v14** (verified on v14; v13 best-effort, verified 13.351)
 - WFRP4e game system
 
 ## Installation
@@ -45,6 +45,18 @@ https://raw.githubusercontent.com/TheWingedLancer/WFRP4e-Opposed-Rolls/main/modu
 ## Localization
 
 The module ships with English (`lang/en.json`). To add a translation, create a new JSON file (e.g., `lang/de.json`) with the same keys and submit a pull request.
+
+## v14 verification checklist
+
+The core-Foundry surface is v14-ready, but the module calls into the WFRP4e
+**system** for rolls. Confirm these against the system build you run on v14:
+
+1. **`actor.setupCharacteristic(key, options)` / `actor.setupSkill(name, options)`**
+   still return a test object you can `await test.roll()` on.
+2. **`options.fields` shape** — the module passes `{ fields: { difficulty, modifier }, skipTargets: true, appendTitle }`. Verify the system still reads `fields.difficulty` / `fields.modifier` and still honours `skipTargets` (the WFRP4e dialog moved to ApplicationV2; option nesting may have shifted).
+3. **`test.result`** — extraction reads `result.SL`, `result.roll`, `result.target` and `test.succeeded`. The new guard will log an error + notify the GM if these come back empty.
+4. **Condition API** — `actor.hasCondition(key)`, `actor.addCondition(key)`, and `effect.system.condition.value` for Entangled stacking.
+5. **Difficulty config** — `game.wfrp4e.config.difficultyLabels` still populates the dialog dropdown.
 
 ## License
 

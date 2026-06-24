@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0] - 2026-06-23
+
+### Changed
+- **Foundry v14 compatibility.** `module.json` compatibility raised to `verified: "14"` with `minimum: "13"` retained for best-effort v13 support. No core-API breaks were found: the module already uses the v13-modern surfaces (`DialogV2`, `renderChatMessageHTML`, native DOM, `foundry.utils.randomID()`) that v14 expects.
+- **Document globals routed through `CONFIG`.** `ChatMessage` and `Macro` statics now resolve via `CONFIG.ChatMessage.documentClass` / `CONFIG.Macro.documentClass` instead of the bare top-level globals, which Foundry is progressively removing. Behaviour is identical on v13 and v14.
+
+### Added
+- **System-API mismatch guard.** Roll-result extraction now detects an empty/unrecognised WFRP4e test result (e.g. if a future system version relocates `result.SL` / `result.roll` / `result.target`) and surfaces it as a console error plus GM notification, instead of silently reporting a phantom draw. New string `error.resultParse`.
+
+### Notes
+- The WFRP4e **system** test/dialog API (`setupCharacteristic` / `setupSkill`, the `options.fields` and `skipTargets` shape, and `test.result`) is owned by the system and must be smoke-tested against the system build that pairs with v14. See README "v14 verification checklist".
+
 ## [1.3.1] - 2026-03-26
 
 ### Fixed

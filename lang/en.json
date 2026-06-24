@@ -9,6 +9,7 @@
   "wfrp4e-opposed-tests.error.noSkill": "No skill '{skill}' on {name}; using 0.",
   "wfrp4e-opposed-tests.error.timeout": "Timeout waiting for {label}",
   "wfrp4e-opposed-tests.error.rollCancelled": "{name} cancelled their roll. Opposed test aborted.",
+  "wfrp4e-opposed-tests.error.resultParse": "Could not read {name}'s roll result (WFRP4e system test shape may have changed). Check the console.",
   "wfrp4e-opposed-tests.dialog.title": "Opposed Test (WFRP4e)",
   "wfrp4e-opposed-tests.dialog.type": "Type:",
   "wfrp4e-opposed-tests.dialog.typeChar": "Char",

@@ -32,6 +32,23 @@ function esc(str) {
 }
 
 // ---------------------------------------------------------------------------
+// Document class accessors
+// ---------------------------------------------------------------------------
+// Foundry is progressively removing bare top-level document globals
+// (ChatMessage, Macro, ...) in favour of namespaced / CONFIG access.
+// CONFIG.<Doc>.documentClass resolves to the *configured* (system-extended)
+// class and is stable across v13 and v14, so we route document statics
+// through it rather than the globals.
+
+function ChatMessageCls() {
+  return CONFIG.ChatMessage.documentClass;
+}
+
+function MacroCls() {
+  return CONFIG.Macro.documentClass;
+}
+
+// ---------------------------------------------------------------------------
 // Characteristic helpers
 // ---------------------------------------------------------------------------
 
@@ -197,12 +214,25 @@ async function performLocalWfrpRoll(actorId, mode, pick, title, fields = {}) {
     return null;
   }
 
-  // Extract results from the WFRP4e test object
+  // Extract results from the WFRP4e test object.
+  // NOTE (v14 migration): the WFRP4e *system* owns the shape of `test.result`.
+  // If a future system version relocates these fields, extraction silently
+  // yields zeros and the opposed test reports a phantom draw. The guard below
+  // surfaces that as a console error + GM notification so the mismatch is
+  // visible during testing instead of producing a wrong outcome.
   const result = test.result || {};
   const sl = Number(result.SL ?? result.sl ?? 0);
   const roll = Number(result.roll ?? 0);
   const target = Number(result.target ?? 0);
   const succeeded = !!(test.succeeded ?? result.outcome === "success");
+
+  if (!test.result || (roll === 0 && target === 0)) {
+    console.error(
+      `${MODULE_ID} | Could not read roll result from the WFRP4e test object. ` +
+      `The system test API may have changed. Test object:`, test
+    );
+    ui.notifications?.error?.(loc("error.resultParse", { name: actor.name }));
+  }
 
   return { sl, roll, target, succeeded };
 }
@@ -351,7 +381,7 @@ async function ensureMacro() {
   const existing = game.macros.find(m => m.name === macroName);
   const command = getMacroCommand();
   if (!existing) {
-    await Macro.create({
+    await MacroCls().create({
       name: macroName,
       type: MACRO_TYPE,
       img: "icons/skills/social/diplomacy-handshake.webp",
@@ -421,8 +451,8 @@ function installListener() {
             }
           }
 
-          await ChatMessage.create({
-            speaker: ChatMessage.getSpeaker(),
+          await ChatMessageCls().create({
+            speaker: ChatMessageCls().getSpeaker(),
             content:
               `<div><strong>${loc("chat.grappleDamageResult", { wounds: woundLoss, name: esc(token.name) })}</strong>` +
               `<br><small>${loc("chat.grappleDamageBreakdown", { sb, slDiff, tb })}</small></div>`
@@ -650,8 +680,8 @@ async function runOpposedTest() {
     const lines = participants
       .map((p, idx) => `${esc(p.token.name)}: ${esc(labelForPick(formData.picks[idx]))}`)
       .join("<br>");
-    await ChatMessage.create({
-      speaker: ChatMessage.getSpeaker(),
+    await ChatMessageCls().create({
+      speaker: ChatMessageCls().getSpeaker(),
       content: `<div class="opposed-pre"><strong>${esc(title)}</strong><br>${lines}</div>`
     });
   }
@@ -769,13 +799,13 @@ async function runOpposedTest() {
     `${(formData.isGrapple || formData.isEntangle) ? `<hr><strong>${loc("chat.gmActions")}</strong><br>` : ""}` +
     `${actionButtons}${grappleButtons}</div>`;
 
-  await ChatMessage.create({
-    speaker: ChatMessage.getSpeaker(),
+  await ChatMessageCls().create({
+    speaker: ChatMessageCls().getSpeaker(),
     content: publicSummary
   });
 
-  await ChatMessage.create({
-    speaker: ChatMessage.getSpeaker(),
+  await ChatMessageCls().create({
+    speaker: ChatMessageCls().getSpeaker(),
     content: gmSummary,
     whisper: gmIds,
     flags: {
